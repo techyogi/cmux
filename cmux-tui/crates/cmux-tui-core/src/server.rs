@@ -20975,6 +20975,60 @@ mod tests {
         );
     }
 
+    /// Done-until-seen: a finished turn lists as `status: done` (the roster
+    /// `state` stays `idle`) until a frontend acknowledges the tab; reading the
+    /// list again does not clear it, and the next turn is `working` again.
+    #[test]
+    fn agent_status_done_until_seen_survives_reads_and_clears_on_ack() {
+        let mux = test_mux();
+        let tab = mux.new_workspace(None, None).unwrap();
+        let report = |state: AgentState| {
+            mux.report_agent(tab.id, state, AgentSource::Hook, Some("done-until-seen".into()))
+                .unwrap();
+        };
+        let listed = || {
+            let command = Command::ListAgents { surface: Some(tab.id), state: None };
+            let listed = handle_command(&mux, 0, command, &test_writer()).unwrap();
+            let agent = listed["agents"].as_array().unwrap().first().cloned().unwrap_or_default();
+            (
+                agent["state"].as_str().map(str::to_owned),
+                agent["status"].as_str().map(str::to_owned),
+            )
+        };
+        let pair = |state: &str, status: &str| (Some(state.to_owned()), Some(status.to_owned()));
+
+        report(AgentState::Idle);
+        assert_eq!(listed(), pair("idle", "idle"), "a new session has nothing unseen");
+        report(AgentState::Working);
+        assert_eq!(listed(), pair("working", "working"));
+        report(AgentState::Idle);
+        mux.post_notification(
+            "Claude finished".into(),
+            String::new(),
+            NotificationLevel::Info,
+            Some(tab.id),
+        )
+        .unwrap();
+        assert_eq!(listed(), pair("idle", "done"), "the finished turn is not seen yet");
+        assert_eq!(listed(), pair("idle", "done"), "a read must not clear done");
+
+        let ack = |expected: bool| {
+            let command = Command::AckTabNotifications { surface: tab.id };
+            let result = handle_command(&mux, 0, command, &test_writer()).unwrap();
+            assert_eq!(result["cleared"], expected, "{result}");
+            assert_eq!(result["surface"], tab.id, "{result}");
+        };
+        ack(true);
+        assert_eq!(listed(), pair("idle", "idle"), "viewing the tab clears done");
+        ack(false);
+
+        report(AgentState::Working);
+        assert_eq!(listed(), pair("working", "working"));
+        let busy = Command::ListAgents { surface: Some(tab.id), state: Some("busy".into()) };
+        let busy = handle_command(&mux, 0, busy, &test_writer()).unwrap();
+        assert_eq!(busy["agents"].as_array().map(Vec::len), Some(1), "`busy` is `working`: {busy}");
+    }
+
     #[test]
     fn raw_report_agent_command_commits_public_revision_projection_and_event() {
         let mux = test_mux();

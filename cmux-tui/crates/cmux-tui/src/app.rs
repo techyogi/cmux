@@ -25183,6 +25183,7 @@ fn browser_character_code(character: char) -> (&'static str, u32) {
 #[cfg(test)]
 mod tests {
     mod attention;
+    mod sidebar_agent_status;
 
     #[test]
     fn input_class_groups_routing_semantics() {
